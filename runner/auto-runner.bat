@@ -12,41 +12,61 @@ echo.
 :: ============================================================
 echo [1] Reading current config from config.json...
 
-for /f "tokens=2 delims=:" %%a in ('findstr /i "connect" config.json') do set "connect_line=%%a"
-set "connect_line=%connect_line:"=%"
-set "connect_line=%connect_line: =%"
-set "connect_line=%connect_line:,=%"
-for /f "tokens=1 delims=:" %%b in ("%connect_line%") do set "current_ip=%%b"
-for /f "tokens=2 delims=:" %%c in ("%connect_line%") do set "current_port=%%c"
-if "%current_port%"=="" set "current_port=443"
+:: Use PowerShell to properly parse JSON and extract just the IPv4 address
+set "current_ip="
+for /f "usebackq delims=" %%a in (`powershell -NoProfile -Command "$c = Get-Content 'config.json' -Raw | ConvertFrom-Json; $conn = $c.listeners[0].connect; if ([string]::IsNullOrEmpty($conn)) { exit } $ip = ($conn -split ':')[0]; Write-Output $ip"`) do set "current_ip=%%a"
 
+set "current_port=443"
 echo    Current IP: %current_ip%
 echo    Current Port: %current_port%
+echo.
+
+:: ----------------------------------------------------------
+:: Validate the extracted IP address (must be IPv4)
+:: ----------------------------------------------------------
+echo [1a] Validating IP address...
+
+set "ip_valid=0"
+for /f "usebackq delims=" %%r in (`powershell -NoProfile -Command "$ip='%current_ip%'; $parsed = $null; $ok = [System.Net.IPAddress]::TryParse($ip, [ref]$parsed); if (-not $ok) { exit 1 } if ($parsed.AddressFamily -ne 'InterNetwork') { exit 1 } exit 0"`) do set "dummy=%%r"
+if %errorlevel% equ 0 (
+    set "ip_valid=1"
+    echo    IP '%current_ip%' is a valid IPv4 address.
+) else (
+    echo    WARNING: '%current_ip%' is not a valid IPv4 address (or is empty).
+    echo    Will search for a working SNI from cfgs.txt...
+    echo.
+)
 echo.
 
 :: ============================================================
 :: STEP 2: Ping the current IP to check if it's reachable
 :: ============================================================
-echo [2] Pinging %current_ip% to check connectivity...
+if "!ip_valid!"=="1" (
+    echo [2] Pinging %current_ip% to check connectivity...
 
-ping -n 1 %current_ip% >nul 2>&1
-if %errorlevel% equ 0 (
-    echo    SUCCESS: %current_ip% is reachable.
-    echo    Performing reverse lookup: finding config in cfgs.txt whose SNI resolves to %current_ip%...
-    echo.
-    
-    powershell -Command "$lines = Get-Content 'cfgs.txt'; $target='%current_ip%'; $found = $null; foreach ($l in $lines) { if ($l -match '^trojan://') { $p = [regex]::Match($l, 'sni=([^&]+)'); $domain = if ($p.Success) { $p.Groups[1].Value } else { $null } } elseif ($l -match '^vless://') { $p = [regex]::Match($l, 'host=([^&]+)'); $domain = if ($p.Success) { $p.Groups[1].Value } else { $null } } else { $domain = $null }; if (-not $domain) { continue }; try { $ips = [System.Net.Dns]::GetHostAddresses($domain) } catch { $ips = @() }; foreach ($ip in $ips) { if ($ip.IPAddressToString -eq $target) { $found = $l; break } }; if ($found) { break } }; if ($found) { [System.IO.File]::WriteAllText('sni_config.tmp', $found, [System.Text.Encoding]::ASCII); exit 0 } else { exit 1 }"
-    
-    if %errorlevel% equ 0 (
-        echo    Found matching config for IP %current_ip%.
+    ping -n 1 %current_ip% >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo    SUCCESS: %current_ip% is reachable.
+        echo    Performing reverse lookup: finding config in cfgs.txt whose SNI resolves to %current_ip%...
         echo.
+        
+        powershell -Command "$lines = Get-Content 'cfgs.txt'; $target='%current_ip%'; $found = $null; foreach ($l in $lines) { if ($l -match '^trojan://') { $p = [regex]::Match($l, 'sni=([^&]+)'); $domain = if ($p.Success) { $p.Groups[1].Value } else { $null } } elseif ($l -match '^vless://') { $p = [regex]::Match($l, 'host=([^&]+)'); $domain = if ($p.Success) { $p.Groups[1].Value } else { $null } } else { $domain = $null }; if (-not $domain) { continue }; try { $ips = [System.Net.Dns]::GetHostAddresses($domain) } catch { $ips = @() }; foreach ($ip in $ips) { if ($ip.IPAddressToString -eq $target) { $found = $l; break } }; if ($found) { break } }; if ($found) { [System.IO.File]::WriteAllText('sni_config.tmp', $found, [System.Text.Encoding]::ASCII); exit 0 } else { exit 1 }"
+        
+        if !errorlevel! equ 0 (
+            echo    Found matching config for IP %current_ip%.
+            echo.
+        ) else (
+            echo    No config found in cfgs.txt whose SNI resolves to %current_ip%.
+            echo.
+        )
+        goto :SHOW_POPUP
     ) else (
-        echo    No config found in cfgs.txt whose SNI resolves to %current_ip%.
+        echo    FAILED: %current_ip% is not reachable.
+        echo    Will search for a working SNI from cfgs.txt...
         echo.
     )
-    goto :SHOW_POPUP
 ) else (
-    echo    FAILED: %current_ip% is not reachable.
+    echo [2] Skipping ping - IP is empty or invalid.
     echo    Will search for a working SNI from cfgs.txt...
     echo.
 )
@@ -81,9 +101,9 @@ echo.
 :: STEP 3c: Update config.json with the new IP
 :: ============================================================
 :UPDATE_CONFIG
-echo [3c] Updating config.json with new IP: %new_ip%:%current_port%...
+echo [3c] Updating config.json with new IP: %new_ip%:443...
 
-powershell -Command "$config = Get-Content 'config.json' -Raw | ConvertFrom-Json; $config.listeners[0].connect = '%new_ip%:%current_port%'; $config | ConvertTo-Json | Set-Content 'config.json' -Encoding UTF8"
+powershell -Command "$config = Get-Content 'config.json' -Raw | ConvertFrom-Json; $config.listeners[0].connect = '%new_ip%:443'; $config | ConvertTo-Json | Set-Content 'config.json' -Encoding UTF8"
 
 if %errorlevel% neq 0 (
     echo ERROR: Failed to update config.json!
