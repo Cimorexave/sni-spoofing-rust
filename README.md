@@ -5,12 +5,64 @@
 [![Latest Downloads](https://img.shields.io/github/downloads/therealaleph/sni-spoofing-rust/latest/total?label=latest%20release)](https://github.com/therealaleph/sni-spoofing-rust/releases/latest)
 [![Stars](https://img.shields.io/github/stars/therealaleph/sni-spoofing-rust?style=flat)](https://github.com/therealaleph/sni-spoofing-rust/stargazers)
 [![License](https://img.shields.io/github/license/therealaleph/sni-spoofing-rust)](LICENSE)
+[![CI](https://github.com/YOUR_USER/sni-spoof-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USER/sni-spoof-rs/actions/workflows/ci.yml)
 
 Rust implementation of [patterniha's SNI-Spoofing](https://github.com/patterniha/SNI-Spoofing) DPI bypass technique. All credit for the original idea and method goes to [@patterniha](https://github.com/patterniha).
 
 A TCP forwarder that injects a fake TLS ClientHello with an intentionally wrong TCP sequence number right after the 3-way handshake. Stateful DPI reads the fake SNI and whitelists the flow. The real server drops the packet (out-of-window seq). Real traffic then passes through undetected.
 
+> **🪟 Windows Auto-Runner:** This fork includes an automated runner for Windows that finds a working Cloudflare IP and SNI, updates `config.json`, and launches the proxy — no manual configuration needed. See [Quick Start (Windows)](#-windows-auto-runner) below.
+
 **[English Guide](#setup-guide)** | **[Persian Guide](#%D8%B1%D8%A7%D9%87%D9%86%D9%85%D8%A7%DB%8C-%D9%81%D8%A7%D8%B1%D8%B3%DB%8C)**
+
+---
+
+## 🪟 Windows Auto-Runner
+
+This fork adds a **Windows auto-runner** that automates finding a working Cloudflare IP and SNI, so you don't have to manually update `config.json` when IPs get blocked.
+
+### Quick Start (Windows)
+
+1. Download `sni-spoof-rs-windows-amd64-auto-v*.zip` from the [Releases](https://github.com/YOUR_USER/sni-spoof-rs/releases) page
+2. Extract the zip anywhere
+3. Right-click [`auto-runner.bat`](runner/auto-runner.bat) → **Run as Administrator**
+4. The runner will:
+   - Check if the current IP is reachable (TCP connect on port 443)
+   - If not, search [`cfgs.txt`](runner/cfgs.txt) for a working SNI config
+   - Update [`config.json`](runner/config.json) automatically
+   - Show your V2Ray config in a popup window
+   - Launch `sni-spoof-rs.exe`
+5. Connect with your v2ray/xray client to `127.0.0.1:40443` as usual
+
+### What's in the Package
+
+| File | Purpose |
+|---|---|
+| `sni-spoof-rs.exe` | Core DPI bypass proxy |
+| `WinDivert64.sys` + `WinDivert.dll` | WinDivert packet capture driver |
+| [`auto-runner.bat`](runner/auto-runner.bat) | Entry point — double-click this |
+| [`config.json`](runner/config.json) | Proxy configuration (auto-updated) |
+| [`cfgs.txt`](runner/cfgs.txt) | Your V2Ray/Trojan config list |
+| `README.txt` | Quick-start instructions |
+
+### Providing Your Configs
+
+Copy your V2Ray/Trojan subscription configs into [`cfgs.txt`](runner/cfgs.txt) (one per line). See [`cfgs.example.txt`](cfgs.example.txt) for the format. The runner tests each config's SNI domain for DNS resolution and TCP connectivity on port 443, then picks the first working one.
+
+### Building the Package Yourself
+
+```bash
+# Build the Rust binary and package the auto-runner zip
+make package-windows-auto VERSION=v0.5.1
+```
+
+Or use the PowerShell script directly:
+
+```powershell
+.\scripts\package-windows.ps1 -Version v0.5.1
+```
+
+---
 
 ## Platforms
 

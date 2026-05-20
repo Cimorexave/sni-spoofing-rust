@@ -2,6 +2,27 @@
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
+:: ============================================================
+:: CHECK: Administrator privileges
+:: ============================================================
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo This script requires Administrator privileges.
+    echo Restarting with elevated permissions...
+    powershell start -verb runas '%~f0'
+    exit /b
+)
+
+:: ============================================================
+:: CHECK: sni-spoof-rs.exe must be present
+:: ============================================================
+if not exist "sni-spoof-rs.exe" (
+    echo ERROR: sni-spoof-rs.exe not found in the current directory.
+    echo Make sure it is placed alongside auto-runner.bat.
+    pause
+    exit /b 1
+)
+
 echo ============================================
 echo   SNI Spoof Auto-Runner
 echo ============================================
@@ -39,14 +60,19 @@ if %errorlevel% equ 0 (
 echo.
 
 :: ============================================================
-:: STEP 2: Ping the current IP to check if it's reachable
+:: STEP 2: TCP connect test on the current IP (port 443)
+::         Uses TCP instead of ICMP ping because many Cloudflare
+::         IPs block ICMP but still accept TCP connections.
 :: ============================================================
 if "!ip_valid!"=="1" (
-    echo [2] Pinging %current_ip% to check connectivity...
+    echo [2] Testing TCP connectivity to %current_ip%:443...
 
-    ping -n 1 %current_ip% >nul 2>&1
+    for /f "usebackq delims=" %%r in (`
+        powershell -NoProfile -Command "$ip='%current_ip%'; $tcp = New-Object System.Net.Sockets.TcpClient; $conn = $tcp.BeginConnect($ip, 443, $null, $null); $wait = $conn.AsyncWaitHandle.WaitOne(3000, $false); if ($wait -and $tcp.Connected) { $tcp.EndConnect($conn); $tcp.Close(); exit 0 } else { $tcp.Close(); exit 1 }"
+    `) do set "dummy=%%r"
+
     if !errorlevel! equ 0 (
-        echo    SUCCESS: %current_ip% is reachable.
+        echo    SUCCESS: %current_ip%:443 is reachable (TCP).
         echo    Performing reverse lookup: finding config in cfgs.txt whose SNI resolves to %current_ip%...
         echo.
         
@@ -61,12 +87,12 @@ if "!ip_valid!"=="1" (
         )
         goto :SHOW_POPUP
     ) else (
-        echo    FAILED: %current_ip% is not reachable.
+        echo    FAILED: %current_ip%:443 is not reachable (TCP timeout).
         echo    Will search for a working SNI from cfgs.txt...
         echo.
     )
 ) else (
-    echo [2] Skipping ping - IP is empty or invalid.
+    echo [2] Skipping TCP test - IP is empty or invalid.
     echo    Will search for a working SNI from cfgs.txt...
     echo.
 )

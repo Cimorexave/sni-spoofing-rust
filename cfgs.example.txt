@@ -1,0 +1,29 @@
+# ============================================================
+# SNI Spoof Config List (Example)
+# ============================================================
+#
+# This file contains your V2Ray/Trojan subscription configs.
+# The auto-runner (auto-runner.bat) will:
+#   1. Extract the SNI domain from each config line
+#   2. Resolve DNS for that domain
+#   3. Test TCP connectivity on port 443
+#   4. Pick the first working config and update config.json
+#
+# FORMAT:
+#   trojan://PASSWORD@127.0.0.1:40443?security=tls&sni=DOMAIN&...
+#   vless://UUID@127.0.0.1:40443?encryption=none&security=tls&host=DOMAIN&...
+#
+# IMPORTANT:
+#   - The address MUST be 127.0.0.1 (or 0.0.0.0) with port matching
+#     the "listen" port in config.json (default: 40443)
+#   - The SNI domain (trojan) or host domain (vless) is what gets tested
+#   - Lines starting with # are comments and are ignored
+#   - Empty lines are ignored
+#
+# ============================================================
+# EXAMPLE CONFIGS (replace with your own):
+# ============================================================
+#
+# trojan://example-password@127.0.0.1:40443?security=tls&sni=www.example.com&insecure=1&allowInsecure=1&type=ws&host=www.example.com&path=%2F#MyConfig
+#
+# vless://00000000-0000-0000-0000-000000000000@127.0.0.1:40443?encryption=none&security=tls&sni=sni.example.com&insecure=1&allowInsecure=1&type=ws&host=sni.example.com&path=%2F#MyVlessConfig

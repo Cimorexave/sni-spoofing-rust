@@ -11,6 +11,7 @@ Current version: **v0.5.1**
 | `sni-spoof-rs-macos-amd64` | macOS x86_64 |
 | `sni-spoof-rs-macos-arm64` | macOS Apple Silicon |
 | `sni-spoof-rs-windows-amd64.zip` | Windows x86_64 (contains exe + WinDivert.dll + WinDivert64.sys) |
+| `sni-spoof-rs-windows-amd64-auto-v*.zip` | Windows x86_64 with auto-runner (exe + WinDivert + batch script) |
 
 ## Download via git clone
 

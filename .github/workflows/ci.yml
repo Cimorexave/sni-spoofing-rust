@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-runner:
+    name: Test auto-runner logic
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+
+      - name: Run auto-runner tests
+        run: python runner/test_auto_runner.py
+        working-directory: ${{ github.workspace }}
+
+  lint-batch:
+    name: Lint auto-runner.bat
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check batch file syntax (basic validation)
+        shell: cmd
+        run: |
+          echo "Validating auto-runner.bat exists and is non-empty..."
+          if not exist runner\auto-runner.bat exit /b 1
+          for %%I in (runner\auto-runner.bat) do if %%~zI equ 0 exit /b 1
+          echo "OK: auto-runner.bat exists and is non-empty."

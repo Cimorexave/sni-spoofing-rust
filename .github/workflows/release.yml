@@ -1,141 +1,185 @@
-name: release
+name: Build & Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            name: sni-spoof-rs-linux-amd64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            name: sni-spoof-rs-linux-arm64
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            name: sni-spoof-rs-macos-amd64
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            name: sni-spoof-rs-macos-arm64
-          - target: x86_64-pc-windows-gnu
-            os: windows-latest
-            name: sni-spoof-rs-windows-amd64
+  test:
+    name: Run tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run auto-runner tests
+        run: python runner/test_auto_runner.py
 
-    runs-on: ${{ matrix.os }}
-
+  build-windows:
+    name: Build Windows binary
+    runs-on: windows-latest
+    needs: [test]
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.target }}
+          target: x86_64-pc-windows-msvc
 
-      - name: Install MinGW toolchain
-        if: matrix.target == 'x86_64-pc-windows-gnu'
-        id: msys2
-        uses: msys2/setup-msys2@v2
+      - name: Build release binary
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
         with:
-          msystem: MINGW64
-          update: true
-          install: mingw-w64-x86_64-gcc
+          name: sni-spoof-rs-exe
+          path: target/x86_64-pc-windows-msvc/release/sni-spoof-rs.exe
+          retention-days: 1
 
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+  package-auto-runner:
+    name: Package auto-runner ZIP
+    runs-on: windows-latest
+    needs: [build-windows]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download built binary
+        uses: actions/download-artifact@v4
+        with:
+          name: sni-spoof-rs-exe
+          path: target/release/
+
+      - name: Extract WinDivert files from upstream release zip
+        shell: powershell
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
-          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
-
-      - name: Configure GNU linker
-        if: matrix.target == 'x86_64-pc-windows-gnu'
-        shell: pwsh
-        run: |
-          $gcc = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin\gcc.exe" -replace '\\','/'
-          New-Item -ItemType Directory -Force -Path $env:USERPROFILE/.cargo | Out-Null
-          Add-Content -Path $env:USERPROFILE/.cargo/config.toml -Value '[target.x86_64-pc-windows-gnu]'
-          Add-Content -Path $env:USERPROFILE/.cargo/config.toml -Value "linker = '$gcc'"
-
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Package (unix)
-        if: runner.os != 'Windows'
-        run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/sni-spoof-rs dist/${{ matrix.name }}
-          chmod +x dist/${{ matrix.name }}
-
-      - name: Package (windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist/${{ matrix.name }}
-          Copy-Item target/${{ matrix.target }}/release/sni-spoof-rs.exe dist/${{ matrix.name }}/
-          $sysFile = Get-ChildItem -Recurse -Path target -Filter "WinDivert64.sys" | Select-Object -First 1
-          $dllFile = Get-ChildItem -Recurse -Path target -Filter "WinDivert.dll" | Select-Object -First 1
-          if ($sysFile -and $dllFile) {
-            Copy-Item $sysFile.FullName dist/${{ matrix.name }}/
-            Copy-Item $dllFile.FullName dist/${{ matrix.name }}/
+          if (Test-Path 'releases/sni-spoof-rs-windows-amd64.zip') {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path 'releases/sni-spoof-rs-windows-amd64.zip'))
+            New-Item -ItemType Directory -Path windivert -Force | Out-Null
+            foreach ($entry in $zip.Entries) {
+              $name = $entry.Name
+              if ($name -match '^(WinDivert64\.sys|WinDivert\.dll)$') {
+                $dest = "windivert\$name"
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
+                Write-Host "Extracted: $name"
+              }
+            }
+            $zip.Dispose()
           } else {
-            Write-Host "WinDivert files not found in build output, downloading from WinDivert release"
-            Invoke-WebRequest -Uri "https://github.com/basil00/Divert/releases/download/v2.2.2/WinDivert-2.2.2-A.zip" -OutFile windivert.zip
-            Expand-Archive windivert.zip -DestinationPath windivert-extracted
-            Copy-Item windivert-extracted/WinDivert-2.2.2-A/x64/WinDivert.dll dist/${{ matrix.name }}/
-            Copy-Item windivert-extracted/WinDivert-2.2.2-A/x64/WinDivert64.sys dist/${{ matrix.name }}/
+            Write-Warning "Upstream release zip not found. WinDivert files will be missing."
           }
-          Compress-Archive -Path dist/${{ matrix.name }}/* -DestinationPath dist/${{ matrix.name }}.zip
 
-      - uses: actions/upload-artifact@v4
+      - name: Create staging directory and populate files
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path staging -Force | Out-Null
+          Copy-Item target/release/sni-spoof-rs.exe staging/sni-spoof-rs.exe -Force
+          if (Test-Path windivert/WinDivert64.sys) { Copy-Item windivert/WinDivert64.sys staging/WinDivert64.sys -Force }
+          if (Test-Path windivert/WinDivert.dll) { Copy-Item windivert/WinDivert.dll staging/WinDivert.dll -Force }
+          Copy-Item runner/auto-runner.bat staging/auto-runner.bat -Force
+          Copy-Item runner/config.json staging/config.json -Force
+          if (Test-Path runner/cfgs.txt) { Copy-Item runner/cfgs.txt staging/cfgs.txt -Force }
+
+      - name: Create README.txt
+        shell: powershell
+        run: |
+          $repo = $env:GITHUB_REPOSITORY
+          $ver = $env:GITHUB_REF_NAME
+          $lines = @(
+            "============================================"
+            "  SNI Spoof Auto-Runner for Windows"
+            "  Version: $ver"
+            "============================================"
+            ""
+            "QUICK START:"
+            "  1. Right-click 'auto-runner.bat' -> Run as Administrator"
+            "  2. The runner will find a working Cloudflare IP and SNI"
+            "  3. It will show your V2Ray config in a popup"
+            "  4. It will launch sni-spoof-rs.exe automatically"
+            "  5. Connect with your v2ray/xray client to 127.0.0.1:40443"
+            ""
+            "REQUIREMENTS:"
+            "  - Windows 10/11 (64-bit)"
+            "  - Administrator privileges (required for WinDivert driver)"
+            ""
+            "FILES IN THIS PACKAGE:"
+            "  - sni-spoof-rs.exe     - The core DPI bypass proxy"
+            "  - WinDivert64.sys      - WinDivert kernel driver"
+            "  - WinDivert.dll        - WinDivert user-mode library"
+            "  - auto-runner.bat      - Entry point (double-click this)"
+            "  - config.json          - Proxy configuration"
+            "  - cfgs.txt             - Your V2Ray/Trojan configs (add your own)"
+            ""
+            "CUSTOMIZATION:"
+            "  Edit cfgs.txt to add your own V2Ray/Trojan subscription configs."
+            "  The runner will test each one and pick the first working config."
+            ""
+            "TROUBLESHOOTING:"
+            "  - Make sure you run as Administrator"
+            "  - If your antivirus flags WinDivert64.sys, add an exclusion"
+            "  - Check RUST_LOG=debug for verbose logging"
+            ""
+            "SOURCE & UPDATES:"
+            "  https://github.com/$repo"
+            ""
+          )
+          $lines -join "`r`n" | Out-File -FilePath staging/README.txt -Encoding ASCII
+
+      - name: Create ZIP
+        shell: powershell
+        run: |
+          $version = $env:GITHUB_REF_NAME
+          $zipName = "sni-spoof-rs-windows-amd64-auto-$version.zip"
+          Compress-Archive -Path staging\* -DestinationPath $zipName -Force
+          Write-Host "Created: $zipName"
+          Add-Content -Path $env:GITHUB_ENV -Value "ZIP_NAME=$zipName"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
-          path: dist/${{ matrix.name }}${{ runner.os == 'Windows' && '.zip' || '' }}
+          name: auto-runner-zip
+          path: sni-spoof-rs-windows-amd64-auto-*.zip
+          retention-days: 1
 
-  release:
-    needs: build
+  create-release:
+    name: Create GitHub Release
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    needs: [package-auto-runner]
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - name: Download auto-runner zip
+        uses: actions/download-artifact@v4
         with:
-          path: dist
-          merge-multiple: true
+          name: auto-runner-zip
 
-      - name: Release
+      - name: Generate release notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          ## Auto-Runner Release
+
+          ### What's Included
+          - `sni-spoof-rs.exe` — Core DPI bypass proxy
+          - `WinDivert64.sys` + `WinDivert.dll` — WinDivert driver
+          - `auto-runner.bat` — Automated IP/SNI finder and launcher
+          - `config.json` — Default proxy configuration
+
+          ### Usage
+          1. Extract the ZIP anywhere
+          2. Right-click `auto-runner.bat` → **Run as Administrator**
+          3. The runner will find a working config and launch the proxy
+          4. Connect your v2ray/xray client to `127.0.0.1:40443`
+          EOF
+
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
-          generate_release_notes: true
-
-      - name: Commit binaries to releases/ folder
-        run: |
-          mkdir -p releases
-          cp dist/sni-spoof-rs-linux-amd64 releases/
-          cp dist/sni-spoof-rs-linux-arm64 releases/
-          cp dist/sni-spoof-rs-macos-amd64 releases/
-          cp dist/sni-spoof-rs-macos-arm64 releases/
-          cp dist/sni-spoof-rs-windows-amd64.zip releases/
-          chmod +x releases/sni-spoof-rs-linux-* releases/sni-spoof-rs-macos-*
-          TAG="${GITHUB_REF#refs/tags/}"
-          sed -i "s/Current version: \*\*v[0-9.]*\*\*/Current version: **${TAG}**/" releases/README.md || true
-          sed -i "s/نسخه فعلی: \*\*v[0-9.]*\*\*/نسخه فعلی: **${TAG}**/" releases/README.md || true
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add releases/
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: update prebuilt binaries to ${TAG}"
-            git push origin HEAD:main
-          fi
+          name: Release ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: |
+            sni-spoof-rs-windows-amd64-auto-*.zip
