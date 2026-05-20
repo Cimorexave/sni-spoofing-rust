@@ -6,3 +6,10 @@
 
 # configs file
 cfgs.txt
+
+# build binaries and artifacts in runner
+runner/*.exe
+runner/*.dll
+runner/*.so
+runner/*.dylib
+runner/*.sys
